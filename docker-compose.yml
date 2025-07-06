@@ -1,0 +1,25 @@
+version: '3.8'
+
+services:
+  yukii-bot:
+    build: .
+    container_name: yukii-bot
+    restart: unless-stopped
+    volumes:
+      - ./data:/app/data
+      - ./config.json:/app/config.json
+    environment:
+      - TZ=Asia/Jakarta
+    networks:
+      - yukii-network
+    # Uncomment if you need to expose ports
+    # ports:
+    #   - "8080:8080"
+
+networks:
+  yukii-network:
+    driver: bridge
+
+volumes:
+  yukii-data:
+    driver: local

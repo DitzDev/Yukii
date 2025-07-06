@@ -1,0 +1,14 @@
+# watchrun configuration file
+# Generated on 23:09:04
+
+watch_path=.
+extensions=go
+commands=make build
+interval=1000
+recursive=true
+verbose=false
+quiet=false
+daemon=false
+json_output=false
+no_clear=false
+exclude_patterns=*watchrun*
