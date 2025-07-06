@@ -40,7 +40,7 @@ A powerful, modular WhatsApp bot built with Go and WhatsMeow library. Features p
 
 1. Clone the repository:
 ```bash
-git clone https://github.com/yourusername/yukii-bot.git
+git clone https://github.com/DitzDev/yukii-bot.git
 cd yukii-bot
 ```
 
@@ -316,8 +316,8 @@ func (p *MyPlugin) Execute(ctx *Context) error {
 • !help - Show this help
 
 🔗 *Links:*
-• GitHub: https://github.com/yourusername/yukii-bot
-• Documentation: https://docs.yourbot.com
+• GitHub: https://github.com/DitzDev/yukii-bot
+• Documentation: https://docs.fakedocs.com
 
 💡 *Tip:* Use rich prefixes like @, #, $ instead of !`
 
