@@ -15,24 +15,18 @@ func init() {
 	// This would be called by the plugin manager
 }
 
-func (p *PingPlugin) Name() string {
-	return "Ping"
-}
-
-func (p *PingPlugin) Description() string {
-	return "Check bot ping and system information"
-}
-
-func (p *PingPlugin) Usage() string {
-	return "ping"
-}
-
-func (p *PingPlugin) Category() string {
-	return "System"
-}
-
-func (p *PingPlugin) Aliases() []string {
-	return []string{"p", "ping"}
+func NewPingPlugin() *PingPlugin {
+	return &PingPlugin{
+		BasePlugin: BasePlugin{
+			PluginName:        "Ping",
+			PluginDescription: "Check bot ping and system information",
+			PluginUsage:       "ping",
+			PluginCategory:    "System",
+			PluginAliases:     []string{"p", "ping"},
+			NoPrefix:          false,
+			PluginType:        PluginTypeCommand,
+		},
+	}
 }
 
 func (p *PingPlugin) Execute(ctx *Context) error {

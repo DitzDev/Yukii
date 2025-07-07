@@ -6,6 +6,7 @@ import (
 	"os"
 	"regexp"
 	"strings"
+	"sync"
 	"time"
 
 	"yukii-bot/lib/config"
@@ -39,6 +40,8 @@ type Client struct {
 	pairCode       string
 	messageHandler MessageHandler
 	eventHandlers  map[string]func(interface{})
+	loginMutex     sync.RWMutex
+	isConnecting   bool
 }
 
 type Message struct {
@@ -106,9 +109,19 @@ func (c *Client) SetMessageHandler(handler MessageHandler) {
 }
 
 func (c *Client) Connect() error {
+	c.loginMutex.Lock()
+	defer c.loginMutex.Unlock()
+
+	if c.isConnecting {
+		return fmt.Errorf("already connecting")
+	}
+
 	c.client.AddEventHandler(c.handleEvent)
 
 	if c.client.Store.ID == nil {
+		c.isConnecting = true
+		defer func() { c.isConnecting = false }()
+		
 		if err := c.login(); err != nil {
 			return err
 		}
@@ -158,42 +171,87 @@ func (c *Client) loginPair() error {
 		return fmt.Errorf("pair code is required")
 	}
 	
-	if err := c.client.Connect(); err != nil {
-		return err
-	}
-	
-	ctx := context.Background()
-	code, err := c.client.PairPhone(ctx, c.pairCode, true, whatsmeow.PairClientChrome, "Chrome (Linux)")
-	if err != nil {
-		return err
-	}
-	
-	logger.Info("🔐 Pairing code: %s", code)
-	
 	loginChan := make(chan bool, 1)
-	timeout := time.After(30 * time.Second)
+	errorChan := make(chan error, 1)
 	
 	c.client.AddEventHandler(func(evt interface{}) {
-		switch evt.(type) {
+		switch e := evt.(type) {
 		case *events.Connected:
+			logger.Info("🔗 Connected to WhatsApp")
+			time.Sleep(2 * time.Second)
 			if c.client.Store.ID != nil {
-				loginChan <- true
+				logger.Info("✅ Successfully logged in!")
+				select {
+				case loginChan <- true:
+				default:
+				}
 			}
 		case *events.LoggedOut:
-			loginChan <- false
+			logger.Info("❌ Logged out from WhatsApp")
+			select {
+			case loginChan <- false:
+			default:
+			}
+		case *events.Disconnected:
+			logger.Info("⚠️ Disconnected from WhatsApp")
+		case *events.ConnectFailure:
+			logger.Error("❌ Connection failed: %v", e.Reason)
+			select {
+			case errorChan <- fmt.Errorf("connection failed: %v", e.Reason):
+			default:
+			}
 		}
 	})
 	
-	select {
-	case success := <-loginChan:
-		if success {
-			logger.Info("✅ Login successful!")
-			return nil
-		} else {
-			return fmt.Errorf("login failed")
+	if err := c.client.Connect(); err != nil {
+		return fmt.Errorf("failed to connect: %v", err)
+	}
+	
+	logger.Info("⏳ Waiting for connection...")
+	time.Sleep(3 * time.Second)
+	
+	if c.client.Store.ID != nil {
+		logger.Info("✅ Already authenticated!")
+		return nil
+	}
+
+	ctx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
+	defer cancel()
+	
+	logger.Info("🔄 Starting pairing process...")
+	code, err := c.client.PairPhone(ctx, c.pairCode, true, whatsmeow.PairClientChrome, "Chrome (Linux)")
+	if err != nil {
+		return fmt.Errorf("failed to pair phone: %v", err)
+	}
+	
+	logger.Info("🔐 Pairing code: %s", code)
+	logger.Info("⏳ Waiting for authentication... (this may take up to 5 minutes)")
+	
+	timeout := time.After(5 * time.Minute) 
+	
+	for {
+		select {
+		case success := <-loginChan:
+			if success {
+				logger.Info("✅ Login successful!")
+				return nil
+			} else {
+				return fmt.Errorf("authentication failed - logged out")
+			}
+		case err := <-errorChan:
+			return fmt.Errorf("connection error: %v", err)
+		case <-timeout:
+			return fmt.Errorf("authentication timeout - please try again")
+		case <-time.After(15 * time.Second):
+			if !c.client.IsConnected() {
+				logger.Info("⚠️ Connection lost, reconnecting...")
+				if err := c.client.Connect(); err != nil {
+					logger.Error("Failed to reconnect: %v", err)
+				}
+			} else {
+				logger.Info("⏳ Still waiting for authentication...")
+			}
 		}
-	case <-timeout:
-		return fmt.Errorf("login timeout")
 	}
 }
 
@@ -207,6 +265,10 @@ func (c *Client) handleEvent(evt interface{}) {
 		logger.Connection("disconnected")
 	case *events.LoggedOut:
 		logger.Connection("logged out")
+	case *events.ConnectFailure:
+		logger.Error("Connection failure: %v", e.Reason)
+	case *events.ClientOutdated:
+		logger.Error("Client outdated - please update whatsmeow")
 	}
 }
 
@@ -293,7 +355,7 @@ func (c *Client) convertMessage(evt *events.Message) *Message {
 
 func (c *Client) getDisplayName(jid types.JID) string {
 	if jid.Server == types.DefaultUserServer {
-	    ctx := context.Background()
+		ctx := context.Background()
 		contact, err := c.client.Store.Contacts.GetContact(ctx, jid)
 		if err == nil && contact.FullName != "" {
 			return contact.FullName
@@ -343,6 +405,9 @@ func (c *Client) SendReply(original *Message, text string) error {
 }
 
 func (c *Client) Disconnect() {
+	c.loginMutex.Lock()
+	defer c.loginMutex.Unlock()
+	
 	if c.client != nil {
 		c.client.Disconnect()
 	}
@@ -357,6 +422,23 @@ func (c *Client) GetJID() types.JID {
 
 func (c *Client) IsConnected() bool {
 	return c.client.IsConnected()
+}
+
+func (c *Client) ConnectWithRetry(maxRetries int) error {
+	var lastErr error
+	
+	for i := 0; i < maxRetries; i++ {
+		if err := c.Connect(); err != nil {
+			lastErr = err
+			backoff := time.Duration(i+1) * time.Second * 2
+			logger.Info("🔄 Retry %d/%d failed, waiting %v before next attempt", i+1, maxRetries, backoff)
+			time.Sleep(backoff)
+			continue
+		}
+		return nil
+	}
+	
+	return fmt.Errorf("failed to connect after %d attempts: %v", maxRetries, lastErr)
 }
 
 func HasPrefix(body, prefix string) bool {

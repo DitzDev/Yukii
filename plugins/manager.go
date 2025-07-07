@@ -117,7 +117,8 @@ func NewManager(client *whatsapp.Client, db *database.Database) *Manager {
 }
 
 func (m *Manager) LoadPlugins() error {
-	m.registerPlugin(&PingPlugin{})
+    // Register plugin
+	m.registerPlugin(NewPingPlugin())
 	//m.registerPlugin(&SpeedTestPlugin{})
 	
 	logger.Info("📦 Loaded %d plugins", len(m.plugins))
